@@ -109,6 +109,8 @@ def predict_audio_dl(file_path: str) -> tuple:
         raise ValueError("Audio is empty or corrupted.")
 
     features = processor.extract_features(y)
+    print(f"  -> Extracted DL features shape: {features.shape}")
+    print(f"  -> Extracted DL features sample: {features[:5]}")
 
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     scaler_path = os.path.join(BASE_DIR, "models", "voice_dl_scaler.pkl")
@@ -119,8 +121,14 @@ def predict_audio_dl(file_path: str) -> tuple:
 
     scaler = joblib.load(scaler_path)
     scaled_features = scaler.transform(np.array(features).reshape(1, -1))
+    print(f"  -> Scaled DL features mean: {np.mean(scaled_features):.4f}, std: {np.std(scaled_features):.4f}")
 
     input_size = scaled_features.shape[1]
+    
+    # Assert model input shape matches training shape
+    # The training input size for this concatenated feature vector is 40+40+40+128 = 248
+    assert input_size == 248, f"Feature length mismatch! Expected 248, got {input_size}"
+
     model = VoiceFNN(input_size=input_size)
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model = model.to(device)
@@ -128,9 +136,12 @@ def predict_audio_dl(file_path: str) -> tuple:
 
     with torch.no_grad():
         inputs = torch.tensor(scaled_features, dtype=torch.float32).to(device)
+        print(f"  -> Input to model shape: {inputs.shape}")
         outputs = model(inputs)
+        print(f"  -> Raw model output: {outputs}")
         # Temperature scaling (T=2.0) to soften extreme confidences
         probs = torch.softmax(outputs / 2.0, dim=1)
+        print(f"  -> Scaled model probabilities: {probs}")
         prob_parkinson = probs[0][1].item()
 
     prediction = "Parkinson Detected" if prob_parkinson >= 0.5 else "Healthy"
@@ -144,7 +155,7 @@ class Predictor:
         print("Initializing Predictor and paths...")
         BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.scaler_path = os.path.join(BASE_DIR, "models", "scaler.pkl")
-        self.selected_features_path = os.path.join(BASE_DIR, "models", "selected_features.pkl")
+        self.selected_features_path = os.path.join(BASE_DIR, "models", "feature_names.pkl")
         self.classical_model_path = os.path.join(BASE_DIR, "models", "best_model.pkl")
         self.wav2vec_classifier_path = os.path.join(BASE_DIR, "checkpoints", "voice_best.pt")
         self.spiral_model_path = os.path.join(BASE_DIR, "models", "spiral_model.pth")
@@ -170,10 +181,23 @@ class Predictor:
         print("Predicting from features using Classical ML...")
         scaler = joblib.load(self.scaler_path)
         model = joblib.load(self.classical_model_path)
+        
+        feature_array_np = np.array(feature_array).reshape(1, -1)
+        expected_shape = model.n_features_in_
+        assert feature_array_np.shape[1] == expected_shape, f"Classical model input shape mismatch! Expected {expected_shape}, got {feature_array_np.shape[1]}"
 
-        scaled_features = scaler.transform(np.array(feature_array).reshape(1, -1))
+        scaled_features = scaler.transform(feature_array_np)
+        print(f"  -> Scaled classical features mean: {np.mean(scaled_features):.4f}, std: {np.std(scaled_features):.4f}")
+        
         prediction = model.predict(scaled_features)[0]
-        prob = model.predict_proba(scaled_features)[0][1] if hasattr(model, "predict_proba") else 1.0
+        
+        print(f"  -> Raw model prediction: {prediction}")
+        if hasattr(model, "predict_proba"):
+            probs = model.predict_proba(scaled_features)
+            print(f"  -> Raw model probabilities: {probs}")
+            prob = probs[0][1]
+        else:
+            prob = 1.0
 
         return "Parkinson Detected" if prediction == 1 else "Healthy", prob
 
@@ -188,8 +212,26 @@ class Predictor:
         Returns:
             (prediction_label, probability)
         """
-        # Standardize audio format
         print(f"Predicting from audio: {audio_path}")
+        
+        # --- INPUT VALIDATION ---
+        import librosa
+        try:
+            y_val, sr_val = librosa.load(audio_path, sr=None)
+            duration = len(y_val) / sr_val
+            if duration < 1.0:
+                raise ValueError(f"Audio duration too short ({duration:.2f}s). Minimum required is 1.0s.")
+                
+            rms = np.sqrt(np.mean(y_val**2))
+            if rms < 0.001:
+                raise ValueError(f"Audio is too quiet or silent (RMS: {rms:.4f}). Please speak louder.")
+        except Exception as e:
+            if isinstance(e, ValueError):
+                raise e
+            print(f"  -> Validation warning: {e}")
+        # ------------------------
+
+        # Standardize audio format
         clean_audio_path = convert_to_wav(audio_path)
 
         if use_wav2vec:

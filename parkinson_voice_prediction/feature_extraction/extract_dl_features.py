@@ -15,18 +15,22 @@ class VoiceDataProcessor:
     def preprocess_audio(self, file_path):
         """Loads, resamples, normalizes, trims, and pads/truncates audio."""
         try:
+            print(f"\n[DEBUG] Preprocessing audio file: {file_path}")
             # 1. Load and resample
             y, sr = librosa.load(file_path, sr=self.target_sr)
+            print(f"  -> Original duration: {len(y)/sr:.2f}s, Shape: {y.shape}")
             
             # 2. Trim silence
             y_trimmed, _ = librosa.effects.trim(y, top_db=20)
             if len(y_trimmed) > 0:
                 y = y_trimmed
+            print(f"  -> Trimmed duration: {len(y)/self.target_sr:.2f}s")
                 
-            # 3. Normalize audio (RMS normalization)
-            rms = np.sqrt(np.mean(y**2))
-            if rms > 0:
-                y = y / rms
+            # 3. Normalize audio (Peak normalization to [-1, 1])
+            max_amp = np.max(np.abs(y))
+            if max_amp > 0:
+                y = y / max_amp
+            print(f"  -> Amplitude stats - Min: {np.min(y):.4f}, Max: {np.max(y):.4f}, Mean: {np.mean(y):.4f}")
                 
             # 4. Handle variable length (pad/truncate to 3 seconds)
             if len(y) > self.max_length:
@@ -34,6 +38,11 @@ class VoiceDataProcessor:
             elif len(y) < self.max_length:
                 padding = self.max_length - len(y)
                 y = np.pad(y, (0, padding), mode='constant')
+            
+            print(f"  -> Final array shape: {y.shape}")
+            
+            if np.isnan(y).any():
+                print("  -> [ERROR] Preprocessed audio contains NaNs!")
                 
             return y
         except Exception as e:

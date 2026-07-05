@@ -22,7 +22,7 @@ fi
 
 # Run the Streamlit app in the background and pipe output to app_log.txt
 echo "Booting up the dashboard..."
-nohup python3 -m streamlit run app.py --server.headless=true --browser.gatherUsageStats=false > app_log.txt 2>&1 &
+nohup .venv/bin/python3 -m streamlit run app.py --server.headless=true --browser.gatherUsageStats=false --server.enableCORS=false --server.enableXsrfProtection=false --server.address=0.0.0.0 > app_log.txt 2>&1 &
 
 # Save the Process ID (PID)
 PID=$!

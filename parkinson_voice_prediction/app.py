@@ -386,3 +386,5 @@ if __name__ == "__main__":
     if not runtime.exists():
         sys.argv = ["streamlit", "run", "app.py"]
         sys.exit(stcli.main())
+    else:
+        main()
